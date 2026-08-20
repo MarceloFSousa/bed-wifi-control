@@ -1,0 +1,2 @@
+class BedControlError(Exception):
+    pass

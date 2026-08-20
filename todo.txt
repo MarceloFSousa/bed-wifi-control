@@ -1,0 +1,7 @@
+- conectar em cada request
+- fazer versao em ws
+- redesign
+- integrar com alexa
+- criar qr code da pagina localhost para colar na parede
+- confirmar salvar posicao
+- mostrar posicao atual da cama
