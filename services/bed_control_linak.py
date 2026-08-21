@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from bleak import BleakClient, BleakError
+from bleak import BleakClient, BleakScanner
 
 from enums.bed_direction import Direction
 from enums.bed_part import BedPart
@@ -27,9 +27,8 @@ _CMD_SAVE_MEMORY = {1: 0x38, 2: 0x39, 3: 0x05}
 _CMD_RECALL_MEMORY = {1: 0x0E, 2: 0x0F, 3: 0x0C}
 
 _REPEAT_INTERVAL_S = 0.1  # dead-man switch: motor so anda enquanto recebe o comando
+_SCAN_TIMEOUT_S = 20
 _CONNECT_TIMEOUT_S = 30
-_CONNECT_ATTEMPTS = 3
-_CONNECT_RETRY_DELAY_S = 1.0
 
 
 class BedControlLinak(BedControlBase):
@@ -41,22 +40,14 @@ class BedControlLinak(BedControlBase):
         self._legs_position = 0
 
     async def connect(self) -> None:
-        last_error: Exception | None = None
-        for _ in range(_CONNECT_ATTEMPTS):
-            client = BleakClient(self._address, timeout=_CONNECT_TIMEOUT_S)
-            try:
-                await client.connect()
-            except BleakError as e:
-                last_error = e
-                await asyncio.sleep(_CONNECT_RETRY_DELAY_S)
-                continue
+        device = await BleakScanner.find_device_by_address(self._address, timeout=_SCAN_TIMEOUT_S)
+        if device is None:
+            raise NotConnectedError(f"Cama nao encontrada: {self._address}")
 
-            self._client = client
-            await self._client.start_notify(_UUID_POS_BACKREST, self._on_backrest_notify)
-            await self._client.start_notify(_UUID_POS_LEGS, self._on_legs_notify)
-            return
-
-        raise NotConnectedError(f"Falha ao conectar na cama apos {_CONNECT_ATTEMPTS} tentativas: {last_error}")
+        self._client = BleakClient(device, timeout=_CONNECT_TIMEOUT_S)
+        await self._client.connect()
+        await self._client.start_notify(_UUID_POS_BACKREST, self._on_backrest_notify)
+        await self._client.start_notify(_UUID_POS_LEGS, self._on_legs_notify)
 
     async def disconnect(self) -> None:
         if self._client and self._client.is_connected:
