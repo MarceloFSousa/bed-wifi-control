@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -25,6 +26,8 @@ else:
     _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 load_dotenv(_APP_DIR / ".env")
+
+logging.basicConfig(level=logging.INFO)
 
 _ADDR_ENV_VAR = "BED_ADDRESS"
 

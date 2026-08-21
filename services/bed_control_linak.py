@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import sys
 
-from bleak import BleakClient, BleakScanner
+from bleak import BleakClient, BleakError
+from bleak.backends.device import BLEDevice
 
 from enums.bed_direction import Direction
 from enums.bed_part import BedPart
 from errors.not_connected_error import NotConnectedError
 from services.bed_control_base import BedControlBase
+
+logger = logging.getLogger(__name__)
 
 _BASE_UUID = "-338a-1024-8a49-009c0215f78a"
 _UUID_CMD = "99fa0002" + _BASE_UUID
@@ -27,8 +33,23 @@ _CMD_SAVE_MEMORY = {1: 0x38, 2: 0x39, 3: 0x05}
 _CMD_RECALL_MEMORY = {1: 0x0E, 2: 0x0F, 3: 0x0C}
 
 _REPEAT_INTERVAL_S = 0.1  # dead-man switch: motor so anda enquanto recebe o comando
-_SCAN_TIMEOUT_S = 20
-_CONNECT_TIMEOUT_S = 30
+_CONNECT_TIMEOUT_S = 20
+_CONNECT_ATTEMPTS = 3
+_CONNECT_RETRY_DELAY_S = 1.0
+
+_IS_LINUX = sys.platform == "linux"
+
+
+def _bluez_device(address: str) -> BLEDevice:
+    """Aponta direto para o objeto D-Bus que o BlueZ ja tem em cache.
+
+    Sem isso o bleak escaneia antes de cada connect; no Pi 3B+ (Wi-Fi e BT na mesma
+    antena) esse scan concorrente derruba a conexao com le-connection-abort-by-local.
+    E o mesmo caminho que o `bluetoothctl connect` usa.
+    """
+    adapter = os.environ.get("BED_ADAPTER", "hci0")
+    path = f"/org/bluez/{adapter}/dev_" + address.upper().replace(":", "_")
+    return BLEDevice(address, None, {"path": path})
 
 
 class BedControlLinak(BedControlBase):
@@ -40,14 +61,36 @@ class BedControlLinak(BedControlBase):
         self._legs_position = 0
 
     async def connect(self) -> None:
-        device = await BleakScanner.find_device_by_address(self._address, timeout=_SCAN_TIMEOUT_S)
-        if device is None:
-            raise NotConnectedError(f"Cama nao encontrada: {self._address}")
+        last_error: Exception | None = None
 
-        self._client = BleakClient(device, timeout=_CONNECT_TIMEOUT_S)
-        await self._client.connect()
-        await self._client.start_notify(_UUID_POS_BACKREST, self._on_backrest_notify)
-        await self._client.start_notify(_UUID_POS_LEGS, self._on_legs_notify)
+        for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+            for target in self._connect_targets():
+                logger.info("Conectando na cama %s (tentativa %d)", self._address, attempt)
+                client = BleakClient(target, timeout=_CONNECT_TIMEOUT_S)
+                try:
+                    await client.connect()
+                except BleakError as e:
+                    logger.warning("Falha ao conectar: %s", e)
+                    last_error = e
+                    continue
+
+                self._client = client
+                await client.start_notify(_UUID_POS_BACKREST, self._on_backrest_notify)
+                await client.start_notify(_UUID_POS_LEGS, self._on_legs_notify)
+                logger.info("Conectado na cama %s", self._address)
+                return
+
+            await asyncio.sleep(_CONNECT_RETRY_DELAY_S)
+
+        raise NotConnectedError(
+            f"Falha ao conectar na cama apos {_CONNECT_ATTEMPTS} tentativas: {last_error}"
+        )
+
+    def _connect_targets(self) -> list[BLEDevice | str]:
+        """Caminho D-Bus primeiro (sem scan); o endereco puro fica de reserva."""
+        if _IS_LINUX:
+            return [_bluez_device(self._address), self._address]
+        return [self._address]
 
     async def disconnect(self) -> None:
         if self._client and self._client.is_connected:

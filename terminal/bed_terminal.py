@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 import os
 
+from dotenv import load_dotenv
+
 from enums.bed_direction import Direction
 from enums.bed_part import BedPart
 from errors.bed_control_error import BedControlError
 from services.bed_control_base import BedControlBase
 from services.bed_control_linak import BedControlLinak
+
+load_dotenv()
 
 _ADDR_ENV_VAR = "BED_ADDRESS"
 
